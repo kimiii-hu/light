@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>light2 实验（修正版）</title>
+  <style>
+    body { text-align: center; font-family: sans-serif; margin:0; padding:0; }
+    #prompt { position: fixed; top: 10px; width:100%; font-size: 20px; color:#000; }
+    #stimulus { font-size: 60px; margin-top: 100px; }
+  </style>
+</head>
+<body>
+  <div id="prompt">按 下 开 始 实 验</div>
+  <div id="stimulus"></div>
+  <button id="startBtn">开始实验</button>
+
+  <script>
+    const promptEl = document.getElementById('prompt');
+    const stimEl = document.getElementById('stimulus');
+    const startBtn = document.getElementById('startBtn');
+
+    let subjectId = 'S1';
+    const rounds = ['30Hz','40Hz','55Hz','随机Hz'];
+    let currentRound = 0;
+    let results = [];
+
+    startBtn.onclick = () => {
+      subjectId = prompt('请输入被试ID：') || 'S1';
+      startBtn.disabled = true;
+      runRound();
+    };
+
+    function runRound() {
+      if (currentRound >= rounds.length) {
+        exportData();
+        return;
+      }
+      const freq = rounds[currentRound];
+      // n-back 阶段
+      promptEl.innerText = '请判断当前字母是否与前6个之前不同，不同请按 J 键';
+      runNBack(freq).then(() => {
+        // RT 阶段
+        promptEl.innerText = '看到 “+” 时请尽快按 J 键';
+        return runRT(freq);
+      }).then(() => {
+        // Stroop 阶段
+        promptEl.innerText = '请根据墨水颜色按键：F=红, J=绿, K=蓝, L=黄';
+        return runStroop(freq);
+      }).then(() => {
+        // 闪烁阶段
+        promptEl.innerText = `闪烁阶段 (${freq}) - 注视中央方块`;
+        return runFlicker(freq);
+      }).then(() => {
+        // 问卷阶段
+        return runSurvey(freq);
+      }).then(() => {
+        // 休息阶段
+        promptEl.innerText = '休息1分钟';
+        stimEl.innerText = '';
+        setTimeout(() => {
+          currentRound++;
+          runRound();
+        }, 60000);
+      });
+    }
+
+    function runNBack(freq) {
+      return new Promise(resolve => {
+        const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+        let seq = [];
+        for (let i = 0; i < 6; i++) seq.push(letters.charAt(Math.random()*26|0));
+        const trials = 60;
+        let idx = 0;
+        const data = [];
+        function nextNBack() {
+          if (idx >= trials) {
+            results.push({round: currentRound+1, phase:'n-back', data});
+            resolve();
+            return;
+          }
+          const ch = letters.charAt(Math.random()*26|0);
+          const isTarget = (idx >= 6 && ch === seq[idx-6]);
+          seq.push(ch);
+          stimEl.innerText = ch;
+          let responded = false;
+          const t0 = Date.now();
+          function keyHandler(e) {
+            if (!responded && e.code === 'KeyJ') {
+              responded = true;
+              const rt = Date.now() - t0;
+              data.push({stim: ch, isTarget, response:'J', correct: isTarget, rt});
+            }
+          }
+          window.addEventListener('keydown', keyHandler);
+          setTimeout(() => {
+            window.removeEventListener('keydown', keyHandler);
+            if (!responded) {
+              data.push({stim: ch, isTarget, response:null, correct: false, rt:null});
+            }
+            idx++;
+            setTimeout(nextNBack, 500);
+          }, 500);
+        }
+        nextNBack();
+      });
+    }
+
+    function runRT(freq) {
+      return new Promise(resolve => {
+        let trial = 0;
+        const data = [];
+        function nextRT() {
+          if (trial >= 10) {
+            results.push({round: currentRound+1, phase:'RT', data});
+            resolve();
+            return;
+          }
+          stimEl.innerText = '+';
+          setTimeout(() => {
+            stimEl.innerText = '';
+            setTimeout(() => {
+              stimEl.innerText = '+';
+              const t0 = Date.now();
+              let responded = false;
+              function keyHandler(e) {
+                if (!responded && e.code === 'KeyJ') {
+                  responded = true;
+                  const rt = Date.now() - t0;
+                  data.push({trial: trial+1, response:'J', rt});
+                  window.removeEventListener('keydown', keyHandler);
+                  stimEl.innerText = '';
+                  trial++;
+                  setTimeout(nextRT, 300);
+                }
+              }
+              window.addEventListener('keydown', keyHandler);
+              setTimeout(() => {
+                if (!responded) {
+                  window.removeEventListener('keydown', keyHandler);
+                  data.push({trial: trial+1, response:null, rt:null});
+                  stimEl.innerText = '';
+                  trial++;
+                  setTimeout(nextRT, 300);
+                }
+              }, 2000);
+            }, 500);
+          }, 1000);
+        }
+        nextRT();
+      });
+    }
+
+    function runStroop(freq) {
+      return new Promise(resolve => {
+        const words = ['红','绿','蓝','黄'];
+        const colors = ['red','green','blue','yellow'];
+        const map = {'red':'F','green':'J','blue':'K','yellow':'L'};
+        let idx = 0;
+        const data = [];
+        function nextStroop() {
+          if (idx >= 20) {
+            results.push({round: currentRound+1, phase:'Stroop', data});
+            resolve();
+            return;
+          }
+          const word = words[Math.random()*4|0];
+          const ink = colors[Math.random()*4|0];
+          stimEl.innerText = word;
+          stimEl.style.color = ink;
+          const t0 = Date.now();
+          let responded = false;
+          function keyHandler(e) {
+            if (!responded && ['KeyF','KeyJ','KeyK','KeyL'].includes(e.code)) {
+              responded = true;
+              const rt = Date.now() - t0;
+              const correct = (map[ink] === e.key.toUpperCase());
+              data.push({word, ink, response: e.key.toUpperCase(), correct, rt});
+              window.removeEventListener('keydown', keyHandler);
+              stimEl.innerText = '';
+              idx++;
+              setTimeout(nextStroop, 500);
+            }
+          }
+          window.addEventListener('keydown', keyHandler);
+          setTimeout(() => {
+            if (!responded) {
+              window.removeEventListener('keydown', keyHandler);
+              data.push({word, ink, response:null, correct:false, rt:null});
+              stimEl.innerText = '';
+              idx++;
+              setTimeout(nextStroop, 500);
+            }
+          }, 2000);
+        }
+        nextStroop();
+      });
+    }
+
+    function runFlicker(freq) {
+      return new Promise(resolve => {
+        let hz = (currentRound == 0 ? 30 : currentRound == 1 ? 40 : currentRound == 2 ? 55 : Math.floor(Math.random()*51)+10);
+        if ([30,40,55].includes(hz) === false) hz = Math.floor(Math.random()*51)+10;
+        results.push({round: currentRound+1, phase:'Flicker', frequency: hz});
+        const interval = 1000 / (hz * 2);
+        let color = 'black';
+        stimEl.style.backgroundColor = color;
+        stimEl.style.width = '100vw';
+        stimEl.style.height = '100vh';
+        const timerId = setInterval(() => {
+          color = (color === 'black' ? 'white' : 'black');
+          stimEl.style.backgroundColor = color;
+        }, interval);
+        setTimeout(() => {
+          clearInterval(timerId);
+          stimEl.style.backgroundColor = '';
+          resolve();
+        }, 300000);
+      });
+    }
+
+    function runSurvey(freq) {
+      return new Promise(resolve => {
+        const q1 = prompt("难度评分 (1-5):");
+        const q2 = prompt("疲劳评分 (1-5):");
+        results.push({round: currentRound+1, phase:'Survey', difficulty: q1, fatigue: q2});
+        resolve();
+      });
+    }
+
+    function exportData() {
+      // 将 results 数组拼接成 CSV
+      let csv = 'round,phase,detail\n';
+      results.forEach(item => {
+        if (item.phase === 'Survey') {
+          csv += `${item.round},Survey,难度:${item.difficulty},疲劳:${item.fatigue}\n`;
+        } else if (item.phase === 'Flicker') {
+          csv += `${item.round},Flicker,Freq ${item.frequency}Hz\n`;
+        } else {
+          item.data.forEach(r => {
+            const line = [item.round, item.phase, ...Object.values(r)].join(',');
+            csv += line + '\n';
+          });
+        }
+      });
+      const blob = new Blob([csv], {type:'text/csv'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'data.csv';
+      a.textContent = '下载CSV数据';
+      document.body.appendChild(a);
+
+      const json = JSON.stringify(results, null, 2);
+      const blob2 = new Blob([json], {type:'application/json'});
+      const url2 = URL.createObjectURL(blob2);
+      const b = document.createElement('a');
+      b.href = url2; b.download = 'data.json';
+      b.textContent = '下载JSON数据';
+      document.body.appendChild(b);
+    }
+  </script>
+</body>
+</html>
